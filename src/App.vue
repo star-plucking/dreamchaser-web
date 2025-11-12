@@ -145,6 +145,14 @@ function parseTeams(csvText: string): Team[] {
     .filter((team): team is Team => Boolean(team));
 }
 
+function ensureRandomTeam(source: Team[]): Team {
+  const team = source[Math.floor(Math.random() * source.length)];
+  if (!team) {
+    throw new Error('抽签逻辑异常，请刷新页面重试。');
+  }
+  return team;
+}
+
 function toggleSeed(teamId: number) {
   if (drawPhase.value !== 'seedSelection' || isDrawing.value) {
     return;
@@ -230,10 +238,14 @@ async function drawSlotSequence(pool: Team[], slot: number, label: string) {
 
 async function animateRandomPick(available: Team[]) {
   if (available.length === 1) {
-    spotlightTeam.value = available[0];
+    const soloTeam = available[0];
+    if (!soloTeam) {
+      throw new Error('抽签逻辑异常，请刷新页面重试。');
+    }
+    spotlightTeam.value = soloTeam;
     highlightPulseKey.value++;
     await wait(600);
-    return available[0];
+    return soloTeam;
   }
 
   const spinDuration = 2200 + Math.random() * 1200;
@@ -243,13 +255,13 @@ async function animateRandomPick(available: Team[]) {
   return await new Promise<Team>((resolve) => {
     const interval = setInterval(() => {
       elapsed += tick;
-      const randomTeam = available[Math.floor(Math.random() * available.length)];
+      const randomTeam = ensureRandomTeam(available);
       spotlightTeam.value = randomTeam;
       highlightPulseKey.value++;
 
       if (elapsed >= spinDuration) {
         clearInterval(interval);
-        const finalTeam = available[Math.floor(Math.random() * available.length)];
+        const finalTeam = ensureRandomTeam(available);
         spotlightTeam.value = finalTeam;
         highlightPulseKey.value++;
         setTimeout(() => resolve(finalTeam), 500);
