@@ -34,6 +34,14 @@ const drawHistory = ref<{ group: string; slot: number; team: Team }[]>([]);
 const highlightPulseKey = ref(0);
 const celebration = ref(false);
 
+// 手动抽签状态
+const currentDrawState = ref<{
+  phase: 'seed' | 'regular2' | 'regular3' | null;
+  groupIndex: number;
+  pool: Team[];
+  slot: number;
+} | null>(null);
+
 const groups = ref<Group[]>([
   {
     label: 'A',
@@ -84,6 +92,14 @@ const regularTeams = computed(() => {
 const canConfirmSeeds = computed(() => selectedSeedIds.value.length === 4 && !isDrawing.value);
 
 const isReadyToDraw = computed(() => drawPhase.value === 'seedSelection' && canConfirmSeeds.value);
+
+const canDrawNext = computed(() => {
+  if (isDrawing.value || drawPhase.value === 'seedSelection' || drawPhase.value === 'complete') {
+    return false;
+  }
+  // 只要有抽签状态且未完成，就允许点击（让 drawNextTeam 函数内部处理阶段转换）
+  return currentDrawState.value !== null;
+});
 
 const remainingSlots = computed(() =>
   groups.value.reduce((total, group) => {
@@ -165,30 +181,130 @@ function toggleSeed(teamId: number) {
   }
 }
 
-async function confirmSeeds() {
+function confirmSeeds() {
   if (!isReadyToDraw.value) {
     return;
   }
 
-  isDrawing.value = true;
   celebration.value = false;
   drawHistory.value = [];
   spotlightTeam.value = null;
-  statusMessage.value = '正在为种子队抽签...';
-  drawPhase.value = 'seedDraw';
-
   resetGroups();
 
+  // 初始化手动抽签状态
+  currentDrawState.value = {
+    phase: 'seed',
+    groupIndex: 0,
+    pool: [...seedTeams.value],
+    slot: 1
+  };
+
+  drawPhase.value = 'seedDraw';
+  statusMessage.value = '点击"抽下一签"按钮开始抽签';
+}
+
+async function drawNextTeam() {
+  if (!canDrawNext.value || !currentDrawState.value) {
+    return;
+  }
+
+  const state = currentDrawState.value;
+  if (state.pool.length === 0) {
+    // 当前阶段完成，进入下一阶段
+    if (state.phase === 'seed') {
+      currentDrawState.value = {
+        phase: 'regular2',
+        groupIndex: 0,
+        pool: [...regularTeams.value],
+        slot: 2
+      };
+      drawPhase.value = 'regularDraw';
+      statusMessage.value = '种子队抽签完成！点击"抽下一签"继续抽二号位';
+      return;
+    } else if (state.phase === 'regular2') {
+      // 获取剩余队伍（已抽出的队伍）
+      const drawnTeamIds = drawHistory.value.map((h) => h.team.id);
+      const remaining = regularTeams.value.filter((team) => !drawnTeamIds.includes(team.id));
+      currentDrawState.value = {
+        phase: 'regular3',
+        groupIndex: 0,
+        pool: remaining,
+        slot: 3
+      };
+      statusMessage.value = '二号位抽签完成！点击"抽下一签"继续抽三号位';
+      return;
+    } else if (state.phase === 'regular3') {
+      // 全部完成
+      drawPhase.value = 'complete';
+      statusMessage.value = '抽签完成！所有席位已确定。';
+      currentDrawState.value = null;
+      celebration.value = true;
+      return;
+    }
+  }
+
+  if (state.groupIndex >= groups.value.length) {
+    // 当前阶段所有组都抽完了
+    if (state.phase === 'seed') {
+      currentDrawState.value = {
+        phase: 'regular2',
+        groupIndex: 0,
+        pool: [...regularTeams.value],
+        slot: 2
+      };
+      drawPhase.value = 'regularDraw';
+      statusMessage.value = '种子队抽签完成！点击"抽下一签"继续抽二号位';
+      return;
+    } else if (state.phase === 'regular2') {
+      const drawnTeamIds = drawHistory.value.map((h) => h.team.id);
+      const remaining = regularTeams.value.filter((team) => !drawnTeamIds.includes(team.id));
+      currentDrawState.value = {
+        phase: 'regular3',
+        groupIndex: 0,
+        pool: remaining,
+        slot: 3
+      };
+      statusMessage.value = '二号位抽签完成！点击"抽下一签"继续抽三号位';
+      return;
+    } else if (state.phase === 'regular3') {
+      drawPhase.value = 'complete';
+      statusMessage.value = '抽签完成！所有席位已确定。';
+      currentDrawState.value = null;
+      celebration.value = true;
+      return;
+    }
+  }
+
+  const currentGroup = groups.value[state.groupIndex];
+  const label = state.phase === 'seed' ? '种子队' : `${state.slot}号位`;
+
+  isDrawing.value = true;
+  statusMessage.value = `正在抽取 ${currentGroup.label} 组的${label}...`;
+
   try {
-    await drawSlotSequence([...seedTeams.value], 1, '种子队');
-    drawPhase.value = 'regularDraw';
-    statusMessage.value = '正在为普通队伍抽签（二号位）...';
-    const remaining = await drawSlotSequence([...regularTeams.value], 2, '二号位');
-    statusMessage.value = '正在为普通队伍抽签（三号位）...';
-    await drawSlotSequence(remaining, 3, '三号位');
-    drawPhase.value = 'complete';
-    statusMessage.value = '抽签完成！所有席位已确定。';
-    celebration.value = true;
+    const pickedTeam = await animateRandomPick(state.pool);
+    assignTeamToGroup(currentGroup.label, state.slot, pickedTeam);
+    drawHistory.value.unshift({ group: currentGroup.label, slot: state.slot, team: pickedTeam });
+    
+    // 更新状态
+    state.pool = state.pool.filter((team) => team.id !== pickedTeam.id);
+    state.groupIndex++;
+
+    if (state.groupIndex >= groups.value.length) {
+      // 当前阶段完成
+      if (state.phase === 'seed') {
+        statusMessage.value = '种子队抽签完成！点击"抽下一签"继续抽二号位';
+      } else if (state.phase === 'regular2') {
+        statusMessage.value = '二号位抽签完成！点击"抽下一签"继续抽三号位';
+      } else if (state.phase === 'regular3') {
+        statusMessage.value = '抽签完成！所有席位已确定。';
+        drawPhase.value = 'complete';
+        currentDrawState.value = null;
+        celebration.value = true;
+      }
+    } else {
+      statusMessage.value = `已抽取 ${currentGroup.label} 组${label}，点击"抽下一签"继续`;
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : '抽签过程中出现问题';
     statusMessage.value = message;
@@ -303,6 +419,7 @@ function resetDraw() {
   drawHistory.value = [];
   celebration.value = false;
   spotlightTeam.value = null;
+  currentDrawState.value = null;
   resetGroups();
 }
 </script>
@@ -402,6 +519,15 @@ function resetDraw() {
                 {{ statusMessage }}
               </div>
             </transition>
+          </div>
+          <div v-if="(drawPhase === 'seedDraw' || drawPhase === 'regularDraw') && !isDrawing" class="status-card__action">
+            <button class="primary-btn primary-btn--draw" :disabled="!canDrawNext" @click="drawNextTeam">
+              <span>抽下一签</span>
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="M5 12h14m0 0-5-5m5 5-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                  stroke-linejoin="round" />
+              </svg>
+            </button>
           </div>
         </div>
         <div class="history-card" v-if="drawHistory.length">
@@ -921,6 +1047,12 @@ function resetDraw() {
   align-items: center;
   justify-content: center;
   width: 100%;
+}
+
+.status-card__action {
+  margin-top: 16px;
+  display: flex;
+  justify-content: center;
 }
 
 .status-card__title,
