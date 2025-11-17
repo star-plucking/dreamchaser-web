@@ -276,6 +276,10 @@ async function drawNextTeam() {
   }
 
   const currentGroup = groups.value[state.groupIndex];
+  if (!currentGroup) {
+    statusMessage.value = '抽签状态异常，请重置后重试';
+    return;
+  }
   const label = state.phase === 'seed' ? '种子队' : `${state.slot}号位`;
 
   isDrawing.value = true;
