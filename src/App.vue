@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import eventLogo from './asserts/game_logo.jpg';
 import associationLogo from './asserts/association_logo.png';
+import InfantryLoadingAnimation from './components/InfantryLoadingAnimation.vue'
 
 interface Team {
   id: number;
@@ -22,6 +23,21 @@ interface Group {
 type Phase = 'seedSelection' | 'seedDraw' | 'regularDraw' | 'complete';
 
 const loading = ref(true);
+const isDataReady = ref(false);
+const isAnimationFinished = ref(false);
+
+function checkLoadingState() {
+  if (isDataReady.value && isAnimationFinished.value) {
+    loading.value = false;
+  }
+}
+
+// 处理载入完成
+function handleLoadingClose() {
+  isAnimationFinished.value = true
+  checkLoadingState()
+}
+
 const error = ref<string | null>(null);
 const teams = ref<Team[]>([]);
 
@@ -138,7 +154,8 @@ async function loadTeams() {
   } catch (err) {
     error.value = err instanceof Error ? err.message : '未知错误';
   } finally {
-    loading.value = false;
+    isDataReady.value = true;
+    checkLoadingState();
   }
 }
 
@@ -289,7 +306,7 @@ async function drawNextTeam() {
     const pickedTeam = await animateRandomPick(state.pool);
     assignTeamToGroup(currentGroup.label, state.slot, pickedTeam);
     drawHistory.value.unshift({ group: currentGroup.label, slot: state.slot, team: pickedTeam });
-    
+
     // 更新状态
     state.pool = state.pool.filter((team) => team.id !== pickedTeam.id);
     state.groupIndex++;
@@ -429,6 +446,8 @@ function resetDraw() {
 </script>
 
 <template>
+  <InfantryLoadingAnimation :show="loading" :duration="1.5" :iterations="2" @close="handleLoadingClose" />
+
   <div class="app-shell">
     <div class="background-canvas">
       <div class="bg-gradient"></div>
@@ -524,7 +543,8 @@ function resetDraw() {
               </div>
             </transition>
           </div>
-          <div v-if="(drawPhase === 'seedDraw' || drawPhase === 'regularDraw') && !isDrawing" class="status-card__action">
+          <div v-if="(drawPhase === 'seedDraw' || drawPhase === 'regularDraw') && !isDrawing"
+            class="status-card__action">
             <button class="primary-btn primary-btn--draw" :disabled="!canDrawNext" @click="drawNextTeam">
               <span>抽下一签</span>
               <svg viewBox="0 0 24 24" fill="none">
